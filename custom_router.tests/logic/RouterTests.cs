@@ -295,6 +295,78 @@ public class RouterTests
     }
 
     [Test]
+    public async Task ProcessAsync_AsyncRoute_AwaitsHandlerCompletion()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using IDisposable handle = router.RegisterAsync(
+            "users/10",
+            async () =>
+            {
+                await Task.Yield();
+                completion.SetResult(true);
+            });
+
+        // Act
+        await router.ProcessAsync("users/10");
+
+        // Assert
+        Assert.That(completion.Task.IsCompletedSuccessfully, Is.True);
+    }
+
+    [Test]
+    public async Task ProcessAsync_ParameterizedAsyncRoute_PassesValue()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int actual = 0;
+        using IDisposable handle = router.RegisterAsync<int>(
+            "users/{id:int}",
+            id =>
+            {
+                actual = id;
+                return Task.CompletedTask;
+            });
+
+        // Act
+        await router.ProcessAsync("users/42");
+
+        // Assert
+        Assert.That(actual, Is.EqualTo(42));
+    }
+
+    [Test]
+    public void ProcessAsync_AsyncHandlerThrows_PropagatesException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        using IDisposable handle = router.RegisterAsync(
+            "users/10",
+            () => Task.FromException(new InvalidOperationException("handler failed")));
+
+        // Act
+        // Assert
+        InvalidOperationException exception = Assert.ThrowsAsync<InvalidOperationException>(
+            () => router.ProcessAsync("users/10"))!;
+        Assert.That(exception.Message, Does.Contain("handler failed"));
+    }
+
+    [Test]
+    public void Process_AsyncRoute_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        using IDisposable handle = router.RegisterAsync("users/10", () => Task.CompletedTask);
+
+        // Act
+        TestDelegate action = () => router.Process("users/10");
+
+        // Assert
+        Assert.Throws<InvalidOperationException>(action);
+    }
+
+    [Test]
     public void Process_InvalidPath_ThrowsArgumentException()
     {
         // Arrange
@@ -363,6 +435,92 @@ public class RouterTests
         // Assert
         Assert.That(staticCalls, Is.EqualTo(1));
         Assert.That(parameterizedCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Process_TrailingSlashDifference_MatchesRoute()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int calls = 0;
+        using IDisposable handle = router.Register<int>("users/{id:int}/", id => calls++);
+
+        // Act
+        router.Process("users/10");
+
+        // Assert
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Process_NonStringRouteWinsOverStringRoute()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int intCalls = 0;
+        int stringCalls = 0;
+        using IDisposable stringRoute = router.Register<string>(
+            "users/{value:string}",
+            value => stringCalls++);
+        using IDisposable intRoute = router.Register<int>(
+            "users/{value:int}",
+            value => intCalls++);
+
+        // Act
+        router.Process("users/10");
+
+        // Assert
+        Assert.That(intCalls, Is.EqualTo(1));
+        Assert.That(stringCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Register_DoubleParameter_ConvertsValue()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        double actual = 0;
+
+        // Act
+        using (router.Register<double>("values/{value:double}", value => actual = value))
+        {
+            router.Process("values/1.5");
+        }
+
+        // Assert
+        Assert.That(actual, Is.EqualTo(1.5));
+    }
+
+    [Test]
+    public void Process_ConcurrentCalls_InvokesHandlerForEachCall()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int calls = 0;
+        using IDisposable handle = router.Register("users/10", () => Interlocked.Increment(ref calls));
+
+        // Act
+        Parallel.For(0, 1000, _ => router.Process("users/10"));
+
+        // Assert
+        Assert.That(calls, Is.EqualTo(1000));
+    }
+
+    [Test]
+    public void Dispose_ConcurrentReplacement_PreservesReplacementRoute()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        IDisposable first = router.Register("users/10", () => { });
+        first.Dispose();
+        IDisposable replacement = router.Register("users/10", () => { });
+
+        // Act
+        Parallel.Invoke(first.Dispose, () => router.Process("users/10"));
+
+        // Assert
+        Assert.DoesNotThrow(() => router.Process("users/10"));
+        replacement.Dispose();
     }
 
     private static IRouter CreateRouter(

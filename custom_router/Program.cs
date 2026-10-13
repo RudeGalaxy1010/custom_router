@@ -9,7 +9,7 @@ namespace custom_router;
 
 public class Program
 {
-    public static void Main(string[] args)
+    public async static Task Main(string[] args)
     {
         IServiceLocator serviceLocator = CreateServices();
 
@@ -24,9 +24,18 @@ public class Program
             "users/{a:int}/{b:int}",
             (b, a) => Console.WriteLine($"a = {a}, b = {b}"));
 
+        using var handle3 = router.RegisterAsync<int>(
+            "async/users/{id:int}",
+            async id =>
+            {
+                await Task.Delay(10);
+                Console.WriteLine($"Async user {id}");
+            });
+
         router.Process("main/page/");
         router.Process("main/page/1");
         router.Process("users/10/20");
+        await router.ProcessAsync("async/users/42");
     }
 
     private static IServiceLocator CreateServices()

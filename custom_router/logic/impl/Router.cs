@@ -8,6 +8,7 @@ public class Router : IRouter
     private readonly IValidator<string> _pathValidator;
     private readonly IRouteFactory _routeFactory;
     private readonly Dictionary<string, IRoute> _routes = new Dictionary<string, IRoute>();
+    private readonly Lock _routesLock = new Lock();
 
     public Router(IValidator<string> pathValidator, IRouteFactory routeFactory)
     {
@@ -44,12 +45,35 @@ public class Router : IRouter
         return AddRoute(path, _routeFactory.Create(path, onNext));
     }
 
+    public IDisposable RegisterAsync(string path, Func<Task> onNext)
+    {
+        ValidateRegistration(path, onNext);
+        return AddRoute(path, _routeFactory.Create(path, onNext));
+    }
+
+    public IDisposable RegisterAsync<T>(string path, Func<T, Task> onNext)
+    {
+        ValidateRegistration(path, onNext);
+        return AddRoute(path, _routeFactory.Create(path, onNext));
+    }
+
+    public IDisposable RegisterAsync<T1, T2>(string path, Func<T1, T2, Task> onNext)
+    {
+        ValidateRegistration(path, onNext);
+        return AddRoute(path, _routeFactory.Create(path, onNext));
+    }
+
     private IDisposable AddRoute(string path, IRoute route)
     {
+        lock (_routesLock)
+        {
+            if (!_routes.TryAdd(path, route))
+            {
+                throw new InvalidOperationException($"Route already registered for: {path}");
+            }
+        }
 
-        return _routes.TryAdd(path, route)
-            ? new DisposeActionHandle(() => _routes.Remove(path))
-            : throw new InvalidOperationException($"Route already registered for: {path}");
+        return new DisposeActionHandle(() => RemoveRoute(path, route));
     }
 
     public void Process(string value)
@@ -64,15 +88,64 @@ public class Router : IRouter
             throw new ArgumentException("value is invalid", nameof(value));
         }
 
-        foreach (IRoute route in _routes.Values.OrderBy(route => route.IsParameterized))
+        IRoute[] routes;
+        lock (_routesLock)
+        {
+            routes = _routes.Values
+                .OrderBy(route => route.IsParameterized)
+                .ThenByDescending(route => route.Specificity)
+                .ToArray();
+        }
+
+        foreach (IRoute route in routes)
         {
             if (route.TryProcess(value))
+            {
+                if (route.IsAsync)
+                {
+                    throw new InvalidOperationException("Use ProcessAsync for asynchronous routes.");
+                }
+
+                return;
+            }
+        }
+
+        throw new KeyNotFoundException($"Route not found: {value}");
+    }
+
+    public async Task ProcessAsync(string value)
+    {
+        ValidatePath(value);
+
+        IRoute[] routes;
+        lock (_routesLock)
+        {
+            routes = _routes.Values
+                .OrderBy(route => route.IsParameterized)
+                .ThenByDescending(route => route.Specificity)
+                .ToArray();
+        }
+
+        foreach (IRoute route in routes)
+        {
+            if (await route.TryProcessAsync(value))
             {
                 return;
             }
         }
 
         throw new KeyNotFoundException($"Route not found: {value}");
+    }
+
+    private void RemoveRoute(string path, IRoute route)
+    {
+        lock (_routesLock)
+        {
+            if (_routes.TryGetValue(path, out IRoute? current) && ReferenceEquals(current, route))
+            {
+                _routes.Remove(path);
+            }
+        }
     }
 
     private void ValidateRegistration(string path, Delegate onNext)
@@ -83,5 +156,18 @@ public class Router : IRouter
         }
 
         ArgumentNullException.ThrowIfNull(onNext);
+    }
+
+    private void ValidatePath(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new ArgumentException("value cannot be null or empty", nameof(value));
+        }
+
+        if (!_pathValidator.Validate(value))
+        {
+            throw new ArgumentException("value is invalid", nameof(value));
+        }
     }
 }

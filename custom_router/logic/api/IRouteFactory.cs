@@ -2,5 +2,5 @@
 
 public interface IRouteFactory
 {
-    IRoute Create(Action onNext);
+    IRoute Create(string template, Action onNext);
 }

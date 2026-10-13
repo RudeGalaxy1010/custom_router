@@ -13,6 +13,6 @@ public class RouteFactory : IRouteFactory
         _parameterTokenizer = parameterTokenizer ?? throw new ArgumentNullException(nameof(parameterTokenizer));
     }
 
-    public IRoute Create(Action onNext) =>
-        new Route(_routeTokenizer, _parameterTokenizer, onNext);
+    public IRoute Create(string template, Action onNext) =>
+        new Route(template, _routeTokenizer, _parameterTokenizer, onNext);
 }

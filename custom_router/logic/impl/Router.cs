@@ -27,7 +27,7 @@ public class Router : IRouter
             throw new ArgumentNullException(nameof(onNext));
         }
 
-        IRoute route = _routeFactory.Create(onNext);
+        IRoute route = _routeFactory.Create(path, onNext);
 
         return _routes.TryAdd(path, route)
             ? new DisposeActionHandle(() => _routes.Remove(path))
@@ -41,9 +41,11 @@ public class Router : IRouter
             throw new ArgumentException("value cannot be null or empty", nameof(value));
         }
 
-        if (_routes.TryGetValue(value, out IRoute? route))
+        IRoute? route = _routes.Values.FirstOrDefault(current => current.Matches(value));
+
+        if (route is not null)
         {
-            route.Process(value);
+            route.Process();
         }
         else
         {

@@ -52,6 +52,34 @@ public class RouterTests
     }
 
     [Test]
+    public void Process_RouteWithDifferentSegmentCount_ThrowsKeyNotFoundException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        using IDisposable handle = router.Register("main/page/", () => { });
+
+        // Act
+        TestDelegate action = () => router.Process("main/page/details/");
+
+        // Assert
+        Assert.Throws<KeyNotFoundException>(action);
+    }
+
+    [Test]
+    public void Process_RouteWithDifferentStaticSegment_ThrowsKeyNotFoundException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        using IDisposable handle = router.Register("main/page/", () => { });
+
+        // Act
+        TestDelegate action = () => router.Process("main/home/");
+
+        // Assert
+        Assert.Throws<KeyNotFoundException>(action);
+    }
+
+    [Test]
     public void Process_UnknownRoute_ThrowsKeyNotFoundException()
     {
         // Arrange

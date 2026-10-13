@@ -23,40 +23,44 @@ public class RouteTests
     }
 
     [Test]
-    public void Matches_EqualStaticRoute_ReturnsTrue()
-    {
-        // Arrange
-        Route route = Create("main/page/");
-
-        // Act
-        bool result = route.Matches("main/page/");
-
-        // Assert
-        Assert.That(result, Is.True);
-    }
-
-    [Test]
-    public void Matches_DifferentStaticRoute_ReturnsFalse()
-    {
-        // Arrange
-        Route route = Create("main/page/");
-
-        // Act
-        bool result = route.Matches("main/home/");
-
-        // Assert
-        Assert.That(result, Is.False);
-    }
-
-    [Test]
-    public void Process_MatchingRoute_InvokesHandler()
+    public void TryProcess_EqualStaticRoute_InvokesHandler()
     {
         // Arrange
         int calls = 0;
         Route route = Create("main/page/", () => calls++);
 
         // Act
-        route.Process();
+        bool result = route.TryProcess("main/page/");
+
+        // Assert
+        Assert.That(result, Is.True);
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TryProcess_DifferentStaticRoute_DoesNotInvokeHandler()
+    {
+        // Arrange
+        int calls = 0;
+        Route route = Create("main/page/", () => calls++);
+
+        // Act
+        bool result = route.TryProcess("main/home/");
+
+        // Assert
+        Assert.That(result, Is.False);
+        Assert.That(calls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void TryProcess_MatchingRoute_InvokesHandler()
+    {
+        // Arrange
+        int calls = 0;
+        Route route = Create("main/page/", () => calls++);
+
+        // Act
+        route.TryProcess("main/page/");
 
         // Assert
         Assert.That(calls, Is.EqualTo(1));

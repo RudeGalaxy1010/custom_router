@@ -2,6 +2,5 @@
 
 public interface IRoute
 {
-    bool Matches(string route);
-    void Process();
+    bool TryProcess(string route);
 }

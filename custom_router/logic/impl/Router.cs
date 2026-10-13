@@ -29,6 +29,24 @@ public class Router : IRouter
 
         IRoute route = _routeFactory.Create(path, onNext);
 
+        return AddRoute(path, route);
+    }
+
+    public IDisposable Register<T>(string path, Action<T> onNext)
+    {
+        ValidateRegistration(path, onNext);
+        return AddRoute(path, _routeFactory.Create(path, onNext));
+    }
+
+    public IDisposable Register<T1, T2>(string path, Action<T1, T2> onNext)
+    {
+        ValidateRegistration(path, onNext);
+        return AddRoute(path, _routeFactory.Create(path, onNext));
+    }
+
+    private IDisposable AddRoute(string path, IRoute route)
+    {
+
         return _routes.TryAdd(path, route)
             ? new DisposeActionHandle(() => _routes.Remove(path))
             : throw new InvalidOperationException($"Route already registered for: {path}");
@@ -41,15 +59,24 @@ public class Router : IRouter
             throw new ArgumentException("value cannot be null or empty", nameof(value));
         }
 
-        IRoute? route = _routes.Values.FirstOrDefault(current => current.Matches(value));
+        foreach (IRoute route in _routes.Values)
+        {
+            if (route.TryProcess(value))
+            {
+                return;
+            }
+        }
 
-        if (route is not null)
+        throw new KeyNotFoundException($"Route not found: {value}");
+    }
+
+    private void ValidateRegistration(string path, Delegate onNext)
+    {
+        if (!_pathValidator.Validate(path))
         {
-            route.Process();
+            throw new ArgumentException("path is invalid", nameof(path));
         }
-        else
-        {
-            throw new KeyNotFoundException($"Route not found: {value}");
-        }
+
+        ArgumentNullException.ThrowIfNull(onNext);
     }
 }

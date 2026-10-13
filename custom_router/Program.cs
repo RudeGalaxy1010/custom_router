@@ -17,7 +17,11 @@ public class Program
         using var handle = router.Register("main/page/",
             () => Console.WriteLine("Main page"));
 
+        using var handle1 = router.Register<int>("main/page/{a:int}",
+            a => Console.WriteLine($"Main page {a}"));
+
         router.Process("main/page/");
+        router.Process("main/page/1");
     }
 
     private static IServiceLocator CreateServices()

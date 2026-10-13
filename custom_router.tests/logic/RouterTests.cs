@@ -170,6 +170,77 @@ public class RouterTests
         Assert.Throws<ArgumentNullException>(action);
     }
 
+    [Test]
+    public void Register_IntParameter_ConvertsAndPassesValue()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int actual = 0;
+
+        // Act
+        using (router.Register<int>("users/{id:int}/", id => actual = id))
+        {
+            router.Process("users/42/");
+        }
+
+        // Assert
+        Assert.That(actual, Is.EqualTo(42));
+    }
+
+    [Test]
+    public void Register_MultipleParameters_PassesValuesInTemplateOrder()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int actualId = 0;
+        string actualName = string.Empty;
+
+        // Act
+        using (router.Register<int, string>(
+                   "users/{id:int}/{name:string}/",
+                   (id, name) =>
+                   {
+                       actualId = id;
+                       actualName = name;
+                   }))
+        {
+            router.Process("users/42/alice/");
+        }
+
+        // Assert
+        Assert.That(actualId, Is.EqualTo(42));
+        Assert.That(actualName, Is.EqualTo("alice"));
+    }
+
+    [Test]
+    public void Register_InvalidParameterValue_DoesNotInvokeHandler()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int calls = 0;
+        using IDisposable handle = router.Register<int>("users/{id:int}/", _ => calls++);
+
+        // Act
+        TestDelegate action = () => router.Process("users/not-an-int/");
+
+        // Assert
+        Assert.Throws<KeyNotFoundException>(action);
+        Assert.That(calls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Register_MismatchedTemplateParameterType_ThrowsArgumentException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+
+        // Act
+        TestDelegate action = () => router.Register<int>("users/{id:string}/", _ => { });
+
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+    }
+
     private static IRouter CreateRouter(
         IValidator<string>? pathValidator = null,
         IRouteFactory? routeFactory = null) => new Router(

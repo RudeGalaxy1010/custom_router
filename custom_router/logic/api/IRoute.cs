@@ -2,5 +2,6 @@
 
 public interface IRoute
 {
+    bool IsParameterized { get; }
     bool TryProcess(string route);
 }

@@ -213,12 +213,37 @@ public class RouterTests
     }
 
     [Test]
+    public void Register_MultipleParametersInDifferentOrder_PassesValuesByName()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int actualB = 0;
+        int actualA = 0;
+
+        // Act
+        using (router.Register<int, int>(
+                   "users/{a:int}/{b:int}/",
+                   (b, a) =>
+                   {
+                       actualB = b;
+                       actualA = a;
+                   }))
+        {
+            router.Process("users/10/20/");
+        }
+
+        // Assert
+        Assert.That(actualB, Is.EqualTo(20));
+        Assert.That(actualA, Is.EqualTo(10));
+    }
+
+    [Test]
     public void Register_InvalidParameterValue_DoesNotInvokeHandler()
     {
         // Arrange
         IRouter router = CreateRouter();
         int calls = 0;
-        using IDisposable handle = router.Register<int>("users/{id:int}/", _ => calls++);
+        using IDisposable handle = router.Register<int>("users/{id:int}/", id => calls++);
 
         // Act
         TestDelegate action = () => router.Process("users/not-an-int/");
@@ -239,6 +264,105 @@ public class RouterTests
 
         // Assert
         Assert.Throws<ArgumentException>(action);
+    }
+
+    [Test]
+    public void Register_UnknownParameterName_ThrowsArgumentException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+
+        // Act
+        TestDelegate action = () => router.Register<int>("users/{userId:int}/", _ => { });
+
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+    }
+
+    [Test]
+    public void Register_DuplicateParameterName_ThrowsArgumentException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+
+        // Act
+        TestDelegate action = () => router.Register<int, int>(
+            "users/{id:int}/{id:int}/",
+            (first, second) => { });
+
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+    }
+
+    [Test]
+    public void Process_InvalidPath_ThrowsArgumentException()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        using IDisposable handle = router.Register<string>("users/{name:string}", name => { });
+
+        // Act
+        TestDelegate action = () => router.Process("users//");
+
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+    }
+
+    [Test]
+    public void Register_StringParameter_PassesValue()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        string actual = string.Empty;
+
+        // Act
+        using (router.Register<string>("users/{name:string}", name => actual = name))
+        {
+            router.Process("users/alice");
+        }
+
+        // Assert
+        Assert.That(actual, Is.EqualTo("alice"));
+    }
+
+    [Test]
+    public void Register_GuidParameter_PassesValue()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        Guid expected = Guid.NewGuid();
+        Guid actual = Guid.Empty;
+
+        // Act
+        using (router.Register<Guid>("users/{id:Guid}", id => actual = id))
+        {
+            router.Process($"users/{expected}");
+        }
+
+        // Assert
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Process_StaticRouteAndParameterizedRoute_StaticRouteWins()
+    {
+        // Arrange
+        IRouter router = CreateRouter();
+        int staticCalls = 0;
+        int parameterizedCalls = 0;
+        using IDisposable parameterized = router.Register<int>(
+            "users/{id:int}",
+            id => parameterizedCalls++);
+        using IDisposable staticRoute = router.Register(
+            "users/10",
+            () => staticCalls++);
+
+        // Act
+        router.Process("users/10");
+
+        // Assert
+        Assert.That(staticCalls, Is.EqualTo(1));
+        Assert.That(parameterizedCalls, Is.EqualTo(0));
     }
 
     private static IRouter CreateRouter(

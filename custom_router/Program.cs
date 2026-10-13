@@ -20,8 +20,13 @@ public class Program
         using var handle1 = router.Register<int>("main/page/{a:int}",
             a => Console.WriteLine($"Main page {a}"));
 
+        using var handle2 = router.Register<int, int>(
+            "users/{a:int}/{b:int}",
+            (b, a) => Console.WriteLine($"a = {a}, b = {b}"));
+
         router.Process("main/page/");
         router.Process("main/page/1");
+        router.Process("users/10/20");
     }
 
     private static IServiceLocator CreateServices()

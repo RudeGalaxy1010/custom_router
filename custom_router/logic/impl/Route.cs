@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Linq.Expressions;
+using System.Reflection;
 using custom_router.logic.api;
 
 namespace custom_router.logic.impl;
@@ -10,7 +11,11 @@ public class Route : IRoute
     private readonly ITokenizer _routeTokenizer;
     private readonly ITokenizer _paramsTokenizer;
     private readonly Type[] _parameterTypes;
+    private readonly string[] _parameterNames;
+    private readonly int[] _templateParameterIndexes;
     private readonly Action<object?[]> _onNext;
+
+    public bool IsParameterized => _parameterTypes.Length > 0;
 
     public Route(
         string template,
@@ -24,8 +29,11 @@ public class Route : IRoute
             ?? throw new ArgumentNullException(nameof(routeTokenizer));
         _routeTokenizer = routeTokenizer ?? throw new ArgumentNullException(nameof(routeTokenizer));
         _paramsTokenizer = paramsTokenizer ?? throw new ArgumentNullException(nameof(paramsTokenizer));
-        _parameterTypes = onNext?.Method.GetParameters().Select(parameter => parameter.ParameterType).ToArray()
+        ParameterInfo[] parameters = onNext?.Method.GetParameters()
             ?? throw new ArgumentNullException(nameof(onNext));
+        _parameterTypes = parameters.Select(parameter => parameter.ParameterType).ToArray();
+        _parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
+        _templateParameterIndexes = Enumerable.Repeat(-1, _templateTokens.Length).ToArray();
         ValidateTemplate();
         _onNext = CreateInvoker(onNext);
     }
@@ -39,8 +47,6 @@ public class Route : IRoute
         }
 
         object?[] parameters = new object?[_parameterTypes.Length];
-        int parameterIndex = 0;
-
         for (int index = 0; index < _templateTokens.Length; index++)
         {
             string templateToken = _templateTokens[index];
@@ -54,6 +60,7 @@ public class Route : IRoute
                 continue;
             }
 
+            int parameterIndex = _templateParameterIndexes[index];
             if (!TryConvert(routeTokens[index], _parameterTypes[parameterIndex], out object? value))
             {
                 return false;
@@ -74,17 +81,33 @@ public class Route : IRoute
             throw new ArgumentException("Template parameters do not match handler parameters.", nameof(_templateTokens));
         }
 
-        foreach ((string token, Type parameterType) in _templateTokens
-                     .Where(IsParameter)
-                     .Zip(_parameterTypes))
+        HashSet<string> templateParameterNames = [];
+        for (int index = 0; index < _templateTokens.Length; index++)
         {
+            string token = _templateTokens[index];
+            if (!IsParameter(token))
+            {
+                continue;
+            }
+
             string[] parameterTokens = _paramsTokenizer.Tokenize(token[1..^1]);
+            string parameterName = parameterTokens.ElementAtOrDefault(0) ?? string.Empty;
+            string parameterTypeName = parameterTokens.ElementAtOrDefault(1) ?? string.Empty;
+            int parameterIndex = Array.IndexOf(_parameterNames, parameterName);
             if (parameterTokens.Length != 2 || string.IsNullOrEmpty(parameterTokens[0]) ||
-                !IsSupportedType(parameterTokens[1]) ||
-                GetType(parameterTokens[1]) != parameterType)
+                !templateParameterNames.Add(parameterName) || parameterIndex < 0 ||
+                !IsSupportedType(parameterTypeName) ||
+                GetType(parameterTypeName) != _parameterTypes[parameterIndex])
             {
                 throw new ArgumentException($"Invalid route parameter: {token}", nameof(_templateTokens));
             }
+
+            _templateParameterIndexes[index] = parameterIndex;
+        }
+
+        if (_templateParameterIndexes.Count(index => index >= 0) != _parameterTypes.Length)
+        {
+            throw new ArgumentException("Template parameters do not match handler parameters.", nameof(_templateTokens));
         }
     }
 

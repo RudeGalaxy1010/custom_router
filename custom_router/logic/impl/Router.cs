@@ -59,7 +59,12 @@ public class Router : IRouter
             throw new ArgumentException("value cannot be null or empty", nameof(value));
         }
 
-        foreach (IRoute route in _routes.Values)
+        if (!_pathValidator.Validate(value))
+        {
+            throw new ArgumentException("value is invalid", nameof(value));
+        }
+
+        foreach (IRoute route in _routes.Values.OrderBy(route => route.IsParameterized))
         {
             if (route.TryProcess(value))
             {

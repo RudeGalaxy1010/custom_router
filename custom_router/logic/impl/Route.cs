@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.ComponentModel;
 using custom_router.logic.api;
+using custom_router.validation.api;
 
 namespace custom_router.logic.impl;
 
@@ -9,54 +10,78 @@ public class Route : IRoute
 {
     private readonly string[] _templateTokens;
     private readonly ITokenizer _routeTokenizer;
-    private readonly ITokenizer _paramsTokenizer;
-    private readonly Type[] _parameterTypes;
-    private readonly string[] _parameterNames;
+    private readonly TypeConverter?[] _parameterConverters;
     private readonly int[] _templateParameterIndexes;
-    private readonly Action<object?[]> _onNext;
-    private readonly Func<object?[], Task>? _onNextAsync;
+    private readonly Func<object?[], Task> _onNextAsync;
 
-    public bool IsParameterized => _parameterTypes.Length > 0;
-    public bool IsAsync { get; }
-    public int Specificity { get; private set; }
+    public bool IsParameterized => _parameterConverters.Length > 0;
+    public int Priority { get; private set; }
 
     public Route(
-        string template,
         ITokenizer routeTokenizer,
         ITokenizer paramsTokenizer,
+        IValidator<RouteParameterValidation> parameterValidator,
+        string template,
         Delegate onNext)
     {
+        ArgumentNullException.ThrowIfNull(routeTokenizer);
+        ArgumentNullException.ThrowIfNull(paramsTokenizer);
+        ArgumentNullException.ThrowIfNull(parameterValidator);
         ArgumentException.ThrowIfNullOrEmpty(template);
         ArgumentNullException.ThrowIfNull(onNext);
 
-        _routeTokenizer = routeTokenizer ?? throw new ArgumentNullException(nameof(routeTokenizer));
-        _paramsTokenizer = paramsTokenizer ?? throw new ArgumentNullException(nameof(paramsTokenizer));
+        _routeTokenizer = routeTokenizer;
         _templateTokens = TokenizePath(template);
-        ParameterInfo[] parameters = onNext.Method.GetParameters();
-        _parameterTypes = parameters.Select(parameter => parameter.ParameterType).ToArray();
-        _parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
+
+        string[] parameterNames = onNext.Method.GetParameters()
+            .Select(parameter => parameter.Name ?? string.Empty)
+            .ToArray();
+
+        MethodInfo invoke = onNext.GetType().GetMethod("Invoke") ??
+                            throw new ArgumentException("Handlers must expose an Invoke method.", nameof(onNext));
+        Type[] parameterTypes = invoke.GetParameters()
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        _parameterConverters = new TypeConverter?[parameterTypes.Length];
         _templateParameterIndexes = Enumerable.Repeat(-1, _templateTokens.Length).ToArray();
-        IsAsync = onNext.Method.ReturnType == typeof(Task);
-        ValidateTemplate();
-        _onNext = IsAsync ? static _ => { } : CreateInvoker(onNext);
-        _onNextAsync = IsAsync ? CreateAsyncInvoker(onNext) : null;
+
+        if (!typeof(Task).IsAssignableFrom(invoke.ReturnType))
+        {
+            throw new ArgumentException("Handlers must return Task or a subclass of Task.", nameof(onNext));
+        }
+
+        if (onNext.GetInvocationList().Length > 1)
+        {
+            throw new ArgumentException("Asynchronous multicast handlers are not supported.", nameof(onNext));
+        }
+
+        PrepareTemplate(paramsTokenizer, parameterValidator, template, parameterNames, parameterTypes);
+        _onNextAsync = CreateInvoker(onNext, parameterTypes);
     }
 
-    public bool TryProcess(string route)
+    public Task ProcessAsync(object?[] parameters) =>
+        _onNextAsync(parameters);
+
+    public bool TryMatch(string route, out object?[] parameters)
     {
         string[] routeTokens = TokenizePath(route);
+
         if (routeTokens.Length != _templateTokens.Length)
         {
+            parameters = [];
             return false;
         }
 
-        object?[] parameters = new object?[_parameterTypes.Length];
-        for (int index = 0; index < _templateTokens.Length; index++)
+        parameters = new object?[_parameterConverters.Length];
+
+        for (int i = 0; i < _templateTokens.Length; i++)
         {
-            string templateToken = _templateTokens[index];
-            if (!IsParameter(templateToken))
+            int parameterIndex = _templateParameterIndexes[i];
+
+            if (parameterIndex < 0)
             {
-                if (templateToken != routeTokens[index])
+                if (_templateTokens[i] != routeTokens[i])
                 {
                     return false;
                 }
@@ -64,8 +89,7 @@ public class Route : IRoute
                 continue;
             }
 
-            int parameterIndex = _templateParameterIndexes[index];
-            if (!TryConvert(routeTokens[index], _parameterTypes[parameterIndex], out object? value))
+            if (!TryConvert(routeTokens[i], _parameterConverters[parameterIndex], out object? value))
             {
                 return false;
             }
@@ -73,83 +97,76 @@ public class Route : IRoute
             parameters[parameterIndex] = value;
         }
 
-        _onNext(parameters);
         return true;
     }
 
-    public async Task<bool> TryProcessAsync(string route)
+    private void PrepareTemplate(ITokenizer paramsTokenizer,
+        IValidator<RouteParameterValidation> parameterValidator,
+        string template,
+        string[] parameterNames,
+        Type[] parameterTypes)
     {
-        if (!TryGetParameters(route, out object?[] parameters))
-        {
-            return false;
-        }
-
-        if (IsAsync)
-        {
-            await _onNextAsync!(parameters);
-        }
-        else
-        {
-            _onNext(parameters);
-        }
-
-        return true;
-    }
-
-    private void ValidateTemplate()
-    {
-        int parameterCount = _templateTokens.Count(IsParameter);
-        if (parameterCount != _parameterTypes.Length)
-        {
-            throw new ArgumentException("Template parameters do not match handler parameters.", nameof(_templateTokens));
-        }
-
         HashSet<string> templateParameterNames = [];
+
         for (int index = 0; index < _templateTokens.Length; index++)
         {
             string token = _templateTokens[index];
+
             if (!IsParameter(token))
             {
                 continue;
             }
 
-            string[] parameterTokens = _paramsTokenizer.Tokenize(token[1..^1]);
-            string parameterName = parameterTokens.ElementAtOrDefault(0) ?? string.Empty;
-            string parameterTypeName = parameterTokens.ElementAtOrDefault(1) ?? string.Empty;
-            int parameterIndex = Array.IndexOf(_parameterNames, parameterName);
-            if (parameterTokens.Length != 2 || string.IsNullOrEmpty(parameterTokens[0]) ||
-                !templateParameterNames.Add(parameterName) || parameterIndex < 0 ||
-                !IsTypeMatch(parameterTypeName, _parameterTypes[parameterIndex]))
+            string[] parts = paramsTokenizer.Tokenize(token[1..^1]);
+
+            if (parts.Length != 2 || string.IsNullOrEmpty(parts[0]))
             {
-                throw new ArgumentException($"Invalid route parameter: {token}", nameof(_templateTokens));
+                throw new ArgumentException($"Invalid route parameter: {token} in template: {template}",
+                    nameof(template));
+            }
+
+            string parameterName = parts[0];
+            int parameterIndex = Array.IndexOf(parameterNames, parameterName);
+
+            bool isDuplicate = !templateParameterNames.Add(parameterName);
+            Type? parameterType = parameterIndex < 0 ? null : parameterTypes[parameterIndex];
+            TypeConverter? converter = null;
+
+            if (parameterType != null && parameterType != typeof(string))
+            {
+                converter = TypeDescriptor.GetConverter(parameterType);
+            }
+
+            RouteParameterValidation validation = new(parameterName, parts[1], parameterType, converter, isDuplicate);
+
+            if (!parameterValidator.Validate(validation))
+            {
+                throw new ArgumentException($"Invalid route parameter: {token} in template: {template}",
+                    nameof(template));
             }
 
             _templateParameterIndexes[index] = parameterIndex;
-            if (_parameterTypes[parameterIndex] != typeof(string))
+
+            if (parameterType == typeof(string))
             {
-                Specificity++;
+                continue;
             }
+
+            _parameterConverters[parameterIndex] = converter;
+            Priority++;
         }
 
-        if (_templateParameterIndexes.Count(index => index >= 0) != _parameterTypes.Length)
+        if (_templateParameterIndexes.Count(index => index >= 0) != parameterTypes.Length)
         {
-            throw new ArgumentException("Template parameters do not match handler parameters.", nameof(_templateTokens));
+            throw new ArgumentException($"Template parameters do not match handler parameters: {template}",
+                nameof(template));
         }
     }
 
-    private Action<object?[]> CreateInvoker(Delegate handler)
+    private Func<object?[], Task> CreateInvoker(Delegate handler, Type[] parameterTypes)
     {
         ParameterExpression values = Expression.Parameter(typeof(object?[]), "values");
-        Expression[] arguments = _parameterTypes.Select((type, index) =>
-            Expression.Convert(Expression.ArrayIndex(values, Expression.Constant(index)), type)).ToArray<Expression>();
-        Expression call = Expression.Invoke(Expression.Constant(handler), arguments);
-        return Expression.Lambda<Action<object?[]>>(call, values).Compile();
-    }
-
-    private Func<object?[], Task> CreateAsyncInvoker(Delegate handler)
-    {
-        ParameterExpression values = Expression.Parameter(typeof(object?[]), "values");
-        Expression[] arguments = _parameterTypes.Select((type, index) =>
+        Expression[] arguments = parameterTypes.Select((type, index) =>
             Expression.Convert(Expression.ArrayIndex(values, Expression.Constant(index)), type)).ToArray<Expression>();
         Expression call = Expression.Invoke(Expression.Constant(handler), arguments);
         return Expression.Lambda<Func<object?[], Task>>(call, values).Compile();
@@ -158,41 +175,23 @@ public class Route : IRoute
     private static bool IsParameter(string token) =>
         token.Length > 1 && token[0] == '{' && token[^1] == '}';
 
-    private static bool IsTypeMatch(string typeName, Type parameterType) =>
-        typeName == parameterType.Name ||
-        typeName == parameterType.FullName ||
-        parameterType == typeof(int) && typeName == "int" ||
-        parameterType == typeof(string) && typeName == "string" ||
-        parameterType == typeof(bool) && typeName == "bool" ||
-        parameterType == typeof(double) && typeName == "double" ||
-        parameterType == typeof(float) && typeName == "float" ||
-        parameterType == typeof(decimal) && typeName == "decimal" ||
-        parameterType == typeof(long) && typeName == "long" ||
-        parameterType == typeof(short) && typeName == "short" ||
-        parameterType == typeof(byte) && typeName == "byte" ||
-        parameterType == typeof(Guid) && typeName == "Guid";
-
-    private static bool TryConvert(string value, Type type, out object? result)
+    private static bool TryConvert(string value, TypeConverter? converter, out object? result)
     {
-        if (type == typeof(string))
+        if (converter == null)
         {
             result = value;
             return true;
         }
 
-        TypeConverter converter = TypeDescriptor.GetConverter(type);
-        if (converter.CanConvertFrom(typeof(string)))
+        try
         {
-            try
-            {
-                result = converter.ConvertFromInvariantString(value);
-                return result is not null;
-            }
-            catch (Exception) when (converter is not null)
-            {
-                // Такое значение означает, что маршрут не подошёл.
-            }
+            result = converter.ConvertFromInvariantString(value);
+            return result != null;
         }
+        // Числовые конвертеры могут оборачивать ошибки значения в ArgumentException.
+        catch (Exception exception) when (
+            exception is FormatException or OverflowException ||
+            exception is ArgumentException { InnerException: FormatException or OverflowException }) { }
 
         result = null;
         return false;
@@ -200,50 +199,9 @@ public class Route : IRoute
 
     private string[] TokenizePath(string path)
     {
-        string[] tokens = _routeTokenizer.Tokenize(path);
-        return tokens.Length > 1 && tokens[^1].Length == 0
+        string[] tokens = _routeTokenizer.Tokenize(PathNormalization.Normalize(path));
+        return path.EndsWith('\\') && tokens.Length > 1 && tokens[^1].Length == 0
             ? tokens[..^1]
             : tokens;
-    }
-
-    private bool TryGetParameters(string? route, out object?[] parameters)
-    {
-        if (!IsAsync || route == null)
-        {
-            parameters = [];
-            return false;
-        }
-
-        string[] routeTokens = TokenizePath(route);
-        if (routeTokens.Length != _templateTokens.Length)
-        {
-            parameters = [];
-            return false;
-        }
-
-        parameters = new object?[_parameterTypes.Length];
-        for (int index = 0; index < _templateTokens.Length; index++)
-        {
-            string templateToken = _templateTokens[index];
-            if (!IsParameter(templateToken))
-            {
-                if (templateToken != routeTokens[index])
-                {
-                    return false;
-                }
-
-                continue;
-            }
-
-            int parameterIndex = _templateParameterIndexes[index];
-            if (!TryConvert(routeTokens[index], _parameterTypes[parameterIndex], out object? value))
-            {
-                return false;
-            }
-
-            parameters[parameterIndex] = value;
-        }
-
-        return true;
     }
 }

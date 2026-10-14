@@ -6,8 +6,7 @@ public class DisposeActionHandle(Action disposeAction) : IDisposable
 
     public void Dispose()
     {
-        Action? disposeAction = _disposeAction;
-        _disposeAction = null;
+        Action? disposeAction = Interlocked.Exchange(ref _disposeAction, null);
         disposeAction?.Invoke();
     }
 }

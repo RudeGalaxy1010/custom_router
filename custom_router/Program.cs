@@ -12,29 +12,41 @@ public class Program
     public async static Task Main(string[] args)
     {
         IServiceLocator serviceLocator = CreateServices();
-
         IRouter router = serviceLocator.Resolve<IRouter>();
+
         using var handle = router.Register("main/page/",
-            () => Console.WriteLine("Main page"));
+            () =>
+            {
+                Console.WriteLine("Main page");
+                return Task.CompletedTask;
+            });
 
-        using var handle1 = router.Register<int>("main/page/{a:int}",
-            a => Console.WriteLine($"Main page {a}"));
+        using var handle1 = router.Register("main/page/{a:int}",
+            (int a) =>
+            {
+                Console.WriteLine($"Main page {a}");
+                return Task.CompletedTask;
+            });
 
-        using var handle2 = router.Register<int, int>(
+        using var handle2 = router.Register(
             "users/{a:int}/{b:int}",
-            (b, a) => Console.WriteLine($"a = {a}, b = {b}"));
+            (int b, int a) =>
+            {
+                Console.WriteLine($"a = {a}, b = {b}");
+                return Task.CompletedTask;
+            });
 
-        using var handle3 = router.RegisterAsync<int>(
+        using var handle3 = router.Register(
             "async/users/{id:int}",
-            async id =>
+            async (int id) =>
             {
                 await Task.Delay(10);
                 Console.WriteLine($"Async user {id}");
             });
 
-        router.Process("main/page/");
-        router.Process("main/page/1");
-        router.Process("users/10/20");
+        await router.ProcessAsync("main/page/");
+        await router.ProcessAsync("main/page/1");
+        await router.ProcessAsync("users/10/20");
         await router.ProcessAsync("async/users/42");
     }
 
@@ -44,7 +56,8 @@ public class Program
 
         ITokenizer routeTokenizer = new SimpleTokenizer('/', '\\');
         ITokenizer paramsTokenizer = new SimpleTokenizer(':');
-        IRouteFactory routeFactory = new RouteFactory(routeTokenizer, paramsTokenizer);
+        IValidator<RouteParameterValidation> parameterValidator = new RouteParameterValidator();
+        IRouteFactory routeFactory = new RouteFactory(routeTokenizer, paramsTokenizer, parameterValidator);
         IValidator<string> pathValidator = new RegexValidator(@"\s|//");
         IRouter router = new Router(pathValidator, routeFactory);
 

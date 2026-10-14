@@ -3,8 +3,7 @@
 public interface IRoute
 {
     bool IsParameterized { get; }
-    bool IsAsync { get; }
-    int Specificity { get; }
-    bool TryProcess(string route);
-    Task<bool> TryProcessAsync(string route);
+    int Priority { get; }
+    bool TryMatch(string route, out object?[] parameters);
+    Task ProcessAsync(object?[] parameters);
 }

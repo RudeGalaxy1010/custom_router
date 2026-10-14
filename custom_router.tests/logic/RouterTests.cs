@@ -4,7 +4,7 @@ using custom_router.logic.impl;
 using custom_router.validation.api;
 using custom_router.validation.impl;
 
-namespace custom_router.tests.logic;
+namespace custom_router.logic.tests;
 
 public class RouterTests
 {
@@ -12,11 +12,9 @@ public class RouterTests
     public void Constructor_NullPathValidator_ThrowsArgumentNullException()
     {
         // Arrange
-        IRouteFactory routeFactory = CreateRouteFactory();
-
+        IRouteFactory factory = CreateRouteFactory();
         // Act
-        TestDelegate action = () => _ = new Router(null!, routeFactory);
-
+        TestDelegate action = () => _ = new Router(null!, factory);
         // Assert
         Assert.Throws<ArgumentNullException>(action);
     }
@@ -25,513 +23,586 @@ public class RouterTests
     public void Constructor_NullRouteFactory_ThrowsArgumentNullException()
     {
         // Arrange
-        IValidator<string> pathValidator = CreatePathValidator();
-
+        IValidator<string> validator = CreatePathValidator();
         // Act
-        TestDelegate action = () => _ = new Router(pathValidator, null!);
-
+        TestDelegate action = () => _ = new Router(validator, null!);
         // Assert
         Assert.Throws<ArgumentNullException>(action);
     }
 
-    [Test]
-    public void Process_RegisteredRoute_InvokesHandler()
+    [TestCase("main/page", "main/page/")]
+    [TestCase("main/page/", "main/page")]
+    [TestCase("/", "/")]
+    public async Task ProcessAsync_StaticRoute_InvokesHandler(string template, string path)
     {
         // Arrange
-        IRouter router = CreateRouter();
+        IRouter router = Create();
         int calls = 0;
-
+        using IDisposable handle = router.Register(template, () => { calls++; return Task.CompletedTask; });
         // Act
-        using (router.Register("main/page/", () => calls++))
-        {
-            router.Process("main/page/");
-        }
-
+        await router.ProcessAsync(path);
         // Assert
         Assert.That(calls, Is.EqualTo(1));
     }
 
-    [Test]
-    public void Process_RouteWithDifferentSegmentCount_ThrowsKeyNotFoundException()
+    [TestCase("main/page/details/")]
+    [TestCase("main/home/")]
+    [TestCase("other/page/")]
+    public void ProcessAsync_UnknownRoute_ThrowsKeyNotFoundException(string path)
     {
         // Arrange
-        IRouter router = CreateRouter();
-        using IDisposable handle = router.Register("main/page/", () => { });
-
+        IRouter router = Create();
+        using IDisposable handle = router.Register("main/page/", () => Task.CompletedTask);
         // Act
-        TestDelegate action = () => router.Process("main/page/details/");
-
         // Assert
-        Assert.Throws<KeyNotFoundException>(action);
+        KeyNotFoundException exception = Assert.ThrowsAsync<KeyNotFoundException>(() => router.ProcessAsync(path))!;
+        Assert.That(exception.Message, Does.Contain(path));
     }
 
-    [Test]
-    public void Process_RouteWithDifferentStaticSegment_ThrowsKeyNotFoundException()
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("main//page/")]
+    [TestCase("main page/")]
+    public void Register_InvalidPath_ThrowsArgumentException(string? path)
     {
         // Arrange
-        IRouter router = CreateRouter();
-        using IDisposable handle = router.Register("main/page/", () => { });
-
+        IRouter router = Create();
         // Act
-        TestDelegate action = () => router.Process("main/home/");
-
+        TestDelegate action = () => router.Register(path!, () => Task.CompletedTask);
         // Assert
-        Assert.Throws<KeyNotFoundException>(action);
+        Assert.Throws<ArgumentException>(action);
     }
 
-    [Test]
-    public void Process_UnknownRoute_ThrowsKeyNotFoundException()
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("users//")]
+    [TestCase("users/a b")]
+    public void ProcessAsync_InvalidPath_ThrowsArgumentException(string? path)
     {
         // Arrange
-        IRouter router = CreateRouter();
-
-        using (router.Register("main/page/", () => { }))
-        {
-            // Act
-            KeyNotFoundException exception = Assert.Throws<KeyNotFoundException>(
-                () => router.Process("other/page/"))!;
-
-            // Assert
-            Assert.That(exception.Message, Does.Contain("other/page/"));
-        }
-    }
-
-    [Test]
-    public void Register_DuplicateRoute_ThrowsInvalidOperationException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        using IDisposable handle = router.Register("main/page/", () => { });
-
+        IRouter router = Create();
         // Act
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
-            () => router.Register("main/page/", () => { }))!;
-
         // Assert
-        Assert.That(exception.Message, Does.Contain("main/page/"));
-    }
-
-    [Test]
-    public void Process_DisposedRoute_ThrowsKeyNotFoundException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        IDisposable handle = router.Register("main/page/", () => { });
-
-        // Act
-        handle.Dispose();
-
-        // Assert
-        Assert.Throws<KeyNotFoundException>(() => router.Process("main/page/"));
-    }
-
-    [Test]
-    public void Dispose_OldHandleAfterReplacement_PreservesNewRoute()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        IDisposable first = router.Register("main/page/", () => { });
-        first.Dispose();
-        IDisposable second = router.Register("main/page/", () => { });
-
-        // Act
-        first.Dispose();
-
-        // Assert
-        Assert.DoesNotThrow(() => router.Process("main/page/"));
-        second.Dispose();
-    }
-
-    [Test]
-    public void Register_InvalidPath_ThrowsArgumentException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-
-        // Act
-        TestDelegate doubleSeparator = () => router.Register("main//page/", () => { });
-        TestDelegate whitespace = () => router.Register("main page/", () => { });
-
-        // Assert
-        Assert.Throws<ArgumentException>(doubleSeparator);
-        Assert.Throws<ArgumentException>(whitespace);
+        Assert.ThrowsAsync<ArgumentException>(() => router.ProcessAsync(path!));
     }
 
     [Test]
     public void Register_NullHandler_ThrowsArgumentNullException()
     {
         // Arrange
-        IRouter router = CreateRouter();
-
+        IRouter router = Create();
         // Act
-        TestDelegate action = () => router.Register("main/page/", null!);
-
+        TestDelegate action = () => router.Register("main/page", null!);
         // Assert
         Assert.Throws<ArgumentNullException>(action);
     }
 
-    [Test]
-    public void Register_IntParameter_ConvertsAndPassesValue()
+    [TestCase("users/10", "users/10")]
+    [TestCase("users/10", "users/10/")]
+    [TestCase("users/10/", "users/10")]
+    [TestCase("users/{id:int}", "users/{id:int}/")]
+    [TestCase("users/{id:int}/", "users/{id:int}")]
+    [TestCase("/", "/")]
+    public void Register_CanonicalDuplicate_ThrowsInvalidOperationException(string first, string second)
     {
         // Arrange
-        IRouter router = CreateRouter();
-        int actual = 0;
-
+        IRouter router = Create();
+        Delegate handler = first.Contains('{')
+            ? (Func<int, Task>)((int id) => Task.CompletedTask)
+            : (Func<Task>)(() => Task.CompletedTask);
+        using IDisposable handle = router.Register(first, handler);
         // Act
-        using (router.Register<int>("users/{id:int}/", id => actual = id))
-        {
-            router.Process("users/42/");
-        }
-
-        // Assert
-        Assert.That(actual, Is.EqualTo(42));
-    }
-
-    [Test]
-    public void Register_MultipleParameters_PassesValuesInTemplateOrder()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        int actualId = 0;
-        string actualName = string.Empty;
-
-        // Act
-        using (router.Register<int, string>(
-                   "users/{id:int}/{name:string}/",
-                   (id, name) =>
-                   {
-                       actualId = id;
-                       actualName = name;
-                   }))
-        {
-            router.Process("users/42/alice/");
-        }
-
-        // Assert
-        Assert.That(actualId, Is.EqualTo(42));
-        Assert.That(actualName, Is.EqualTo("alice"));
-    }
-
-    [Test]
-    public void Register_MultipleParametersInDifferentOrder_PassesValuesByName()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        int actualB = 0;
-        int actualA = 0;
-
-        // Act
-        using (router.Register<int, int>(
-                   "users/{a:int}/{b:int}/",
-                   (b, a) =>
-                   {
-                       actualB = b;
-                       actualA = a;
-                   }))
-        {
-            router.Process("users/10/20/");
-        }
-
-        // Assert
-        Assert.That(actualB, Is.EqualTo(20));
-        Assert.That(actualA, Is.EqualTo(10));
-    }
-
-    [Test]
-    public void Register_InvalidParameterValue_DoesNotInvokeHandler()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        int calls = 0;
-        using IDisposable handle = router.Register<int>("users/{id:int}/", id => calls++);
-
-        // Act
-        TestDelegate action = () => router.Process("users/not-an-int/");
-
-        // Assert
-        Assert.Throws<KeyNotFoundException>(action);
-        Assert.That(calls, Is.EqualTo(0));
-    }
-
-    [Test]
-    public void Register_MismatchedTemplateParameterType_ThrowsArgumentException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-
-        // Act
-        TestDelegate action = () => router.Register<int>("users/{id:string}/", _ => { });
-
-        // Assert
-        Assert.Throws<ArgumentException>(action);
-    }
-
-    [Test]
-    public void Register_UnknownParameterName_ThrowsArgumentException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-
-        // Act
-        TestDelegate action = () => router.Register<int>("users/{userId:int}/", _ => { });
-
-        // Assert
-        Assert.Throws<ArgumentException>(action);
-    }
-
-    [Test]
-    public void Register_DuplicateParameterName_ThrowsArgumentException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-
-        // Act
-        TestDelegate action = () => router.Register<int, int>(
-            "users/{id:int}/{id:int}/",
-            (first, second) => { });
-
-        // Assert
-        Assert.Throws<ArgumentException>(action);
-    }
-
-    [Test]
-    public async Task ProcessAsync_AsyncRoute_AwaitsHandlerCompletion()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        using IDisposable handle = router.RegisterAsync(
-            "users/10",
-            async () =>
-            {
-                await Task.Yield();
-                completion.SetResult(true);
-            });
-
-        // Act
-        await router.ProcessAsync("users/10");
-
-        // Assert
-        Assert.That(completion.Task.IsCompletedSuccessfully, Is.True);
-    }
-
-    [Test]
-    public async Task ProcessAsync_ParameterizedAsyncRoute_PassesValue()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        int actual = 0;
-        using IDisposable handle = router.RegisterAsync<int>(
-            "users/{id:int}",
-            id =>
-            {
-                actual = id;
-                return Task.CompletedTask;
-            });
-
-        // Act
-        await router.ProcessAsync("users/42");
-
-        // Assert
-        Assert.That(actual, Is.EqualTo(42));
-    }
-
-    [Test]
-    public void ProcessAsync_AsyncHandlerThrows_PropagatesException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        using IDisposable handle = router.RegisterAsync(
-            "users/10",
-            () => Task.FromException(new InvalidOperationException("handler failed")));
-
-        // Act
-        // Assert
-        InvalidOperationException exception = Assert.ThrowsAsync<InvalidOperationException>(
-            () => router.ProcessAsync("users/10"))!;
-        Assert.That(exception.Message, Does.Contain("handler failed"));
-    }
-
-    [Test]
-    public void Process_AsyncRoute_ThrowsInvalidOperationException()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        using IDisposable handle = router.RegisterAsync("users/10", () => Task.CompletedTask);
-
-        // Act
-        TestDelegate action = () => router.Process("users/10");
-
+        TestDelegate action = () => router.Register(second, handler);
         // Assert
         Assert.Throws<InvalidOperationException>(action);
     }
 
     [Test]
-    public void Process_InvalidPath_ThrowsArgumentException()
+    public void ProcessAsync_DisposedRoute_ThrowsKeyNotFoundException()
     {
         // Arrange
-        IRouter router = CreateRouter();
-        using IDisposable handle = router.Register<string>("users/{name:string}", name => { });
-
+        IRouter router = Create();
+        IDisposable handle = router.Register("main/page", () => Task.CompletedTask);
         // Act
-        TestDelegate action = () => router.Process("users//");
-
+        handle.Dispose();
         // Assert
-        Assert.Throws<ArgumentException>(action);
+        Assert.ThrowsAsync<KeyNotFoundException>(() => router.ProcessAsync("main/page"));
     }
 
     [Test]
-    public void Register_StringParameter_PassesValue()
+    public async Task Dispose_OldHandleAfterReplacement_PreservesNewRoute()
     {
         // Arrange
-        IRouter router = CreateRouter();
-        string actual = string.Empty;
-
+        IRouter router = Create();
+        IDisposable first = router.Register("main/page/", () => Task.CompletedTask);
+        first.Dispose();
+        int calls = 0;
+        using IDisposable second = router.Register("main/page", () => { calls++; return Task.CompletedTask; });
         // Act
-        using (router.Register<string>("users/{name:string}", name => actual = name))
-        {
-            router.Process("users/alice");
-        }
-
+        first.Dispose();
+        await router.ProcessAsync("main/page/");
         // Assert
-        Assert.That(actual, Is.EqualTo("alice"));
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [TestCase("users/{id:int}", "users/42")]
+    [TestCase("users/{id:Int32}/", "users/42/")]
+    [TestCase("users/{id:System.Int32}", "users/42")]
+    [TestCase("users/{id:INT}", "users/42")]
+    [TestCase("users/{id:system.int32}/", "users/42")]
+    [TestCase("users/{id:int}", "users/42/")]
+    public async Task ProcessAsync_IntegerParameter_PassesConvertedValue(string template, string path)
+    {
+        // Arrange
+        IRouter router = Create();
+        int actual = 0;
+        using IDisposable handle = router.Register(template, (int id) => { actual = id; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync(path);
+        // Assert
+        Assert.That(actual, Is.EqualTo(42));
     }
 
     [Test]
-    public void Register_GuidParameter_PassesValue()
+    public async Task ProcessAsync_ReversedTypedParameters_BindsByName()
     {
         // Arrange
-        IRouter router = CreateRouter();
+        IRouter router = Create();
+        (int, string, int) actual = default;
+        using IDisposable handle = router.Register("users/{id:int}/{name:string}/{count:int}",
+            (int count, string name, int id) => { actual = (id, name, count); return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync("users/42/alice/7");
+        // Assert
+        Assert.That(actual, Is.EqualTo((42, "alice", 7)));
+    }
+
+    [Test]
+    public async Task ProcessAsync_ReversedIntegerParameters_BindsByName()
+    {
+        // Arrange
+        IRouter router = Create();
+        (int, int) actual = default;
+        using IDisposable handle = router.Register("users/{a:int}/{b:int}",
+            (int b, int a) => { actual = (a, b); return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync("users/10/20");
+        // Assert
+        Assert.That(actual, Is.EqualTo((10, 20)));
+    }
+
+    [TestCase("Guid")]
+    [TestCase("guid")]
+    [TestCase("System.Guid")]
+    [TestCase("SYSTEM.GUID")]
+    public async Task ProcessAsync_GuidParameter_PassesValue(string typeName)
+    {
+        // Arrange
+        IRouter router = Create();
         Guid expected = Guid.NewGuid();
         Guid actual = Guid.Empty;
-
+        using IDisposable handle = router.Register($"users/{{id:{typeName}}}", (Guid id) => { actual = id; return Task.CompletedTask; });
         // Act
-        using (router.Register<Guid>("users/{id:Guid}", id => actual = id))
-        {
-            router.Process($"users/{expected}");
-        }
-
+        await router.ProcessAsync($"users/{expected}");
         // Assert
         Assert.That(actual, Is.EqualTo(expected));
     }
 
     [Test]
-    public void Process_StaticRouteAndParameterizedRoute_StaticRouteWins()
+    public async Task ProcessAsync_DoubleParameter_ConvertsInvariantValue()
     {
         // Arrange
-        IRouter router = CreateRouter();
-        int staticCalls = 0;
-        int parameterizedCalls = 0;
-        using IDisposable parameterized = router.Register<int>(
-            "users/{id:int}",
-            id => parameterizedCalls++);
-        using IDisposable staticRoute = router.Register(
-            "users/10",
-            () => staticCalls++);
-
+        IRouter router = Create();
+        double actual = 0;
+        using IDisposable handle = router.Register("values/{value:double}", (double value) => { actual = value; return Task.CompletedTask; });
         // Act
-        router.Process("users/10");
-
+        await router.ProcessAsync("values/1.5");
         // Assert
-        Assert.That(staticCalls, Is.EqualTo(1));
-        Assert.That(parameterizedCalls, Is.EqualTo(0));
+        Assert.That(actual, Is.EqualTo(1.5));
+    }
+
+    [TestCase("users/{id:string}")]
+    [TestCase("users/{userId:int}")]
+    [TestCase("users/{id:int}/{id:int}")]
+    [TestCase("users/{id:int:extra}")]
+    [TestCase("users")]
+    [TestCase("users/{id:int}/{other:int}")]
+    [TestCase("users/{ID:int}")]
+    [TestCase("users/{id}")]
+    [TestCase("users/{:int}")]
+    [TestCase("users/{id:}")]
+    [TestCase("users/{}")]
+    [TestCase("users/{id:int")]
+    [TestCase("users/id:int}")]
+    public void Register_InvalidTemplateBinding_ThrowsArgumentException(string template)
+    {
+        // Arrange
+        IRouter router = Create();
+        // Act
+        TestDelegate action = () => router.Register(template, (int id) => Task.CompletedTask);
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+    }
+
+    [TestCase("Object")]
+    [TestCase("OBJECT")]
+    public void Register_UnsupportedConversion_ThrowsArgumentException(string typeName)
+    {
+        // Arrange
+        IRouter router = Create();
+        // Act
+        TestDelegate action = () => router.Register($"users/{{id:{typeName}}}", (object id) => Task.CompletedTask);
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+    }
+
+    [TestCase("not-an-int")]
+    [TestCase("999999999999999999999999")]
+    public void ProcessAsync_InvalidInteger_DoesNotInvokeHandler(string value)
+    {
+        // Arrange
+        IRouter router = Create();
+        int calls = 0;
+        using IDisposable handle = router.Register("users/{id:int}", (int id) => { calls++; return Task.CompletedTask; });
+        // Act
+        // Assert
+        Assert.ThrowsAsync<KeyNotFoundException>(() => router.ProcessAsync($"users/{value}"));
+        Assert.That(calls, Is.Zero);
+    }
+
+    [TestCase("not-an-int")]
+    [TestCase("999999999999999999999999")]
+    public async Task ProcessAsync_InvalidInteger_InvokesStringFallback(string value)
+    {
+        // Arrange
+        IRouter router = Create();
+        int calls = 0;
+        string actual = string.Empty;
+        using IDisposable typed = router.Register("users/{id:int}", (int id) => { calls++; return Task.CompletedTask; });
+        using IDisposable fallback = router.Register("users/{id:string}", (string id) => { actual = id; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync($"users/{value}");
+        // Assert
+        Assert.That(calls, Is.Zero);
+        Assert.That(actual, Is.EqualTo(value));
     }
 
     [Test]
-    public void Process_TrailingSlashDifference_MatchesRoute()
+    public async Task ProcessAsync_StaticRoute_OverridesParameterizedRoute()
     {
         // Arrange
-        IRouter router = CreateRouter();
-        int calls = 0;
-        using IDisposable handle = router.Register<int>("users/{id:int}/", id => calls++);
-
+        IRouter router = Create();
+        string actual = string.Empty;
+        using IDisposable typed = router.Register("users/{id:int}", (int id) => { actual = "typed"; return Task.CompletedTask; });
+        using IDisposable plain = router.Register("users/10", () => { actual = "static"; return Task.CompletedTask; });
         // Act
-        router.Process("users/10");
+        await router.ProcessAsync("users/10");
+        // Assert
+        Assert.That(actual, Is.EqualTo("static"));
+    }
 
+    [Test]
+    public async Task ProcessAsync_HigherSpecificity_OverridesStringRoute()
+    {
+        // Arrange
+        IRouter router = Create();
+        string actual = string.Empty;
+        using IDisposable fallback = router.Register("users/{id:string}/{count:string}",
+            (string id, string count) => { actual = "string"; return Task.CompletedTask; });
+        using IDisposable mixed = router.Register("users/{id:int}/{count:string}",
+            (int id, string count) => { actual = "mixed"; return Task.CompletedTask; });
+        using IDisposable typed = router.Register("users/{id:int}/{count:int}",
+            (int id, int count) => { actual = "typed"; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync("users/10/20");
+        // Assert
+        Assert.That(actual, Is.EqualTo("typed"));
+    }
+
+    [Test]
+    public async Task ProcessAsync_EqualPriority_PreservesRegistrationOrder()
+    {
+        // Arrange
+        IRouter router = Create();
+        string actual = string.Empty;
+        using IDisposable first = router.Register("users/{id:int}", (int id) => { actual = "first"; return Task.CompletedTask; });
+        using IDisposable second = router.Register("users/{number:long}", (long number) => { actual = "second"; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync("users/10");
+        // Assert
+        Assert.That(actual, Is.EqualTo("first"));
+    }
+
+    [Test]
+    public async Task ProcessAsync_ContravariantHandler_UsesDelegateParameterType()
+    {
+        // Arrange
+        IRouter router = Create();
+        object? actual = null;
+        Task Handler(object id) { actual = id; return Task.CompletedTask; }
+        Func<string, Task> handler = Handler;
+        using IDisposable handle = router.Register("users/{id:string}", handler);
+        // Act
+        await router.ProcessAsync("users/alice");
+        // Assert
+        Assert.That(actual, Is.EqualTo("alice"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ProcessAsync_TaskResult_AwaitsDelegateContract(bool covariant)
+    {
+        // Arrange
+        IRouter router = Create();
+        TaskCompletionSource<int> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int> Handler() => release.Task;
+        Delegate handler = covariant ? (Func<Task>)Handler : (Func<Task<int>>)Handler;
+        using IDisposable handle = router.Register("users/10", handler);
+        // Act
+        Task processing = router.ProcessAsync("users/10");
+        try
+        {
+            // Assert
+            Assert.That(processing.IsCompleted, Is.False);
+            release.TrySetResult(42);
+            await processing.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(processing.IsCompletedSuccessfully, Is.True);
+        }
+        finally
+        {
+            release.TrySetResult(42);
+            await processing.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Test]
+    public async Task ProcessAsync_AsyncHandler_AwaitsCompletion()
+    {
+        // Arrange
+        IRouter router = Create();
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        using IDisposable handle = router.Register("users/10", async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+            calls++;
+        });
+        // Act
+        Task processing = router.ProcessAsync("users/10");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // Assert
+            Assert.That(processing.IsCompleted, Is.False);
+            Assert.That(calls, Is.Zero);
+            release.TrySetResult();
+            await processing.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(calls, Is.EqualTo(1));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await processing.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ProcessAsync_HandlerThrows_PropagatesException(bool synchronousThrow)
+    {
+        // Arrange
+        IRouter router = Create();
+        using IDisposable handle = router.Register("users/10", () => synchronousThrow
+            ? throw new InvalidOperationException("handler failed")
+            : Task.FromException(new InvalidOperationException("handler failed")));
+        // Act
+        // Assert
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.ProcessAsync("users/10"));
+    }
+
+    [Test]
+    public void Register_MulticastHandler_RejectsWithoutInvocation()
+    {
+        // Arrange
+        IRouter router = Create();
+        int calls = 0;
+        Task Handler() { calls++; return Task.CompletedTask; }
+        Func<Task> handler = Handler;
+        handler += Handler;
+        // Act
+        TestDelegate action = () => router.Register("users/10", handler);
+        // Assert
+        Assert.Throws<ArgumentException>(action);
+        Assert.That(calls, Is.Zero);
+        Assert.ThrowsAsync<KeyNotFoundException>(() => router.ProcessAsync("users/10"));
+    }
+
+    [Test]
+    public void Register_NonTaskContracts_RejectsWithoutInvocation()
+    {
+        // Arrange
+        IRouter router = Create();
+        int calls = 0;
+        Action plain = () => calls++;
+        Action asynchronous = async () => { await Task.Yield(); calls++; };
+        Func<int> value = () => ++calls;
+        Task TaskHandler() { calls++; return Task.CompletedTask; }
+        Func<object> erasedTask = TaskHandler;
+        Func<ValueTask> valueTask = () => { calls++; return ValueTask.CompletedTask; };
+        // Act
+        // Assert
+        Assert.Throws<ArgumentException>(() => router.Register("plain", plain));
+        Assert.Throws<ArgumentException>(() => router.Register("async-void", asynchronous));
+        Assert.Throws<ArgumentException>(() => router.Register("value", value));
+        Assert.Throws<ArgumentException>(() => router.Register("erased", erasedTask));
+        Assert.Throws<ArgumentException>(() => router.Register("value-task", valueTask));
+        Assert.That(calls, Is.Zero);
+    }
+
+    [Test]
+    public async Task ProcessAsync_CustomDelegate_BindsTargetNames()
+    {
+        // Arrange
+        IRouter router = Create();
+        int actual = 0;
+        Task<int> Handler(int id) { actual = id; return Task.FromResult(id); }
+        RouteHandler handler = Handler;
+        using IDisposable handle = router.Register("users/{id:int}", handler);
+        // Act
+        await router.ProcessAsync("users/42");
+        // Assert
+        Assert.That(actual, Is.EqualTo(42));
+    }
+
+    [TestCase("RouteValue")]
+    [TestCase("custom_router.logic.tests.RouteValue")]
+    [TestCase("routevalue")]
+    [TestCase("CUSTOM_ROUTER.LOGIC.TESTS.ROUTEVALUE")]
+    public async Task ProcessAsync_CustomConverter_UsesTypeName(string typeName)
+    {
+        // Arrange
+        IRouter router = Create();
+        RouteValue? actual = null;
+        using IDisposable handle = router.Register($"values/{{value:{typeName}}}",
+            (RouteValue value) => { actual = value; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync("values/hello");
+        // Assert
+        Assert.That(actual?.Value, Is.EqualTo("hello"));
+    }
+
+    [TestCase("format")]
+    [TestCase("overflow")]
+    [TestCase("wrapped-format")]
+    [TestCase("wrapped-overflow")]
+    public async Task ProcessAsync_ExpectedConverterFailure_UsesFallback(string value)
+    {
+        // Arrange
+        IRouter router = Create();
+        string actual = string.Empty;
+        using IDisposable typed = router.Register("values/{value:RouteValue}", (RouteValue value) => Task.CompletedTask);
+        using IDisposable fallback = router.Register("values/{value:string}",
+            (string value) => { actual = value; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync($"values/{value}");
+        // Assert
+        Assert.That(actual, Is.EqualTo(value));
+    }
+
+    [Test]
+    public void ProcessAsync_UnexpectedConverterFailure_PropagatesException()
+    {
+        // Arrange
+        IRouter router = Create();
+        using IDisposable handle = router.Register("values/{value:RouteValue}", (RouteValue value) => Task.CompletedTask);
+        // Act
+        // Assert
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.ProcessAsync("values/bug"));
+    }
+
+    [Test]
+    public void ProcessAsync_UnsupportedConverterFailure_PropagatesException()
+    {
+        // Arrange
+        IRouter router = Create();
+        using IDisposable typed = router.Register("values/{value:RouteValue}", (RouteValue value) => Task.CompletedTask);
+        using IDisposable fallback = router.Register("values/{value:string}", (string value) => Task.CompletedTask);
+        // Act
+        // Assert
+        Assert.ThrowsAsync<NotSupportedException>(() => router.ProcessAsync("values/unsupported"));
+    }
+
+    [Test]
+    public void ProcessAsync_WrongConverterResult_PropagatesException()
+    {
+        // Arrange
+        IRouter router = Create();
+        using IDisposable handle = router.Register("values/{value:RouteValue}", (RouteValue value) => Task.CompletedTask);
+        // Act
+        // Assert
+        Assert.ThrowsAsync<InvalidCastException>(() => router.ProcessAsync("values/wrong-type"));
+    }
+
+    [TestCase("main\\page", "main/page")]
+    [TestCase("main/page", "main\\page")]
+    [TestCase("main/page", "main/page\\")]
+    [TestCase("main/page\\", "main/page")]
+    public async Task ProcessAsync_BackslashSeparator_PreservesMatching(string template, string path)
+    {
+        // Arrange
+        IRouter router = Create();
+        int calls = 0;
+        using IDisposable handle = router.Register(template, () => { calls++; return Task.CompletedTask; });
+        // Act
+        await router.ProcessAsync(path);
         // Assert
         Assert.That(calls, Is.EqualTo(1));
     }
 
     [Test]
-    public void Process_NonStringRouteWinsOverStringRoute()
+    public async Task ProcessAsync_ConcurrentReaders_IsolatesParameters()
     {
         // Arrange
-        IRouter router = CreateRouter();
-        int intCalls = 0;
-        int stringCalls = 0;
-        using IDisposable stringRoute = router.Register<string>(
-            "users/{value:string}",
-            value => stringCalls++);
-        using IDisposable intRoute = router.Register<int>(
-            "users/{value:int}",
-            value => intCalls++);
-
-        // Act
-        router.Process("users/10");
-
-        // Assert
-        Assert.That(intCalls, Is.EqualTo(1));
-        Assert.That(stringCalls, Is.EqualTo(0));
-    }
-
-    [Test]
-    public void Register_DoubleParameter_ConvertsValue()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        double actual = 0;
-
-        // Act
-        using (router.Register<double>("values/{value:double}", value => actual = value))
+        IRouter router = Create();
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int readers = 0;
+        int[] actual = new int[100];
+        using IDisposable handle = router.Register("users/{id:int}", async (int id) =>
         {
-            router.Process("values/1.5");
+            if (Interlocked.Increment(ref readers) == actual.Length)
+            {
+                entered.SetResult();
+            }
+
+            await release.Task;
+            actual[id] = id + 1;
+        });
+        // Act
+        Task[] requests = Enumerable.Range(0, actual.Length)
+            .Select(id => Task.Run(() => router.ProcessAsync($"users/{id}"))).ToArray();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.TrySetResult();
+            await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(5));
+            // Assert
+            Assert.That(actual, Is.EqualTo(Enumerable.Range(1, actual.Length)));
         }
-
-        // Assert
-        Assert.That(actual, Is.EqualTo(1.5));
+        finally
+        {
+            release.TrySetResult();
+            await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
-    [Test]
-    public void Process_ConcurrentCalls_InvokesHandlerForEachCall()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        int calls = 0;
-        using IDisposable handle = router.Register("users/10", () => Interlocked.Increment(ref calls));
-
-        // Act
-        Parallel.For(0, 1000, _ => router.Process("users/10"));
-
-        // Assert
-        Assert.That(calls, Is.EqualTo(1000));
-    }
-
-    [Test]
-    public void Dispose_ConcurrentReplacement_PreservesReplacementRoute()
-    {
-        // Arrange
-        IRouter router = CreateRouter();
-        IDisposable first = router.Register("users/10", () => { });
-        first.Dispose();
-        IDisposable replacement = router.Register("users/10", () => { });
-
-        // Act
-        Parallel.Invoke(first.Dispose, () => router.Process("users/10"));
-
-        // Assert
-        Assert.DoesNotThrow(() => router.Process("users/10"));
-        replacement.Dispose();
-    }
-
-    private static IRouter CreateRouter(
-        IValidator<string>? pathValidator = null,
-        IRouteFactory? routeFactory = null) => new Router(
-        pathValidator ?? CreatePathValidator(),
-        routeFactory ?? CreateRouteFactory());
+    private static IRouter Create(IValidator<string>? pathValidator = null, IRouteFactory? routeFactory = null) =>
+        new Router(pathValidator ?? CreatePathValidator(), routeFactory ?? CreateRouteFactory());
 
     private static IValidator<string> CreatePathValidator() => new RegexValidator(@"\s|//");
 
-    private static IRouteFactory CreateRouteFactory() => new RouteFactory(
-        new SimpleTokenizer('/', '\\'),
-        new SimpleTokenizer(':'));
+    private static IRouteFactory CreateRouteFactory() => new RouteFactory(new SimpleTokenizer('/', '\\'),
+        new SimpleTokenizer(':'), new RouteParameterValidator());
 }

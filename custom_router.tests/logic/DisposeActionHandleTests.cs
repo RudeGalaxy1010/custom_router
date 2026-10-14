@@ -1,7 +1,7 @@
 using NUnit.Framework;
 using custom_router.logic.impl;
 
-namespace custom_router.tests.logic;
+namespace custom_router.logic.tests;
 
 public class DisposeActionHandleTests
 {
@@ -66,6 +66,20 @@ public class DisposeActionHandleTests
         // Act
         Assert.Throws<InvalidOperationException>(() => handle.Dispose());
         handle.Dispose();
+
+        // Assert
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Dispose_ConcurrentCalls_InvokesActionOnce()
+    {
+        // Arrange
+        int calls = 0;
+        using DisposeActionHandle handle = Create(() => Interlocked.Increment(ref calls));
+
+        // Act
+        Parallel.For(0, 1000, _ => handle.Dispose());
 
         // Assert
         Assert.That(calls, Is.EqualTo(1));
